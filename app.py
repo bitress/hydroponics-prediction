@@ -5,11 +5,10 @@ from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, r2_score
-import dash
-from dash import dcc, html
-import plotly.graph_objects as go
-from dash.dependencies import Input, Output
+from flask import Flask, jsonify, request
 from sklearn.model_selection import GridSearchCV
+
+app = Flask(__name__)
 
 def create_connection():
     try:
@@ -26,7 +25,7 @@ def create_connection():
         print(f"Database connection error: {e}")
         return None
 
-def fetch_sensor_data(connection, sensor_id, limit=1000):
+def fetch_sensor_data(connection, sensor_id, limit=300):
     query = f"SELECT reading_time, value FROM sensor_data WHERE sensor_id = {sensor_id} LIMIT {limit};"
     cursor = connection.cursor()
     try:
@@ -95,38 +94,6 @@ def train_xgboost(df):
 
     return best_model, scaler
 
-def predict_when_full(model, scaler, df, target_value=30):
-    last_data = df[['lag_1', 'lag_2', 'lag_3']].iloc[-1]
-    last_data_df = pd.DataFrame([last_data], columns=['lag_1', 'lag_2', 'lag_3'])
-    last_data_scaled = scaler.transform(last_data_df)
-
-    predictions = [model.predict(last_data_scaled)[0]]
-    time_step = 1
-
-    while predictions[-1] < target_value:
-        next_data = [predictions[-1], last_data['lag_1'], last_data['lag_2']]
-        next_data_df = pd.DataFrame([next_data], columns=['lag_1', 'lag_2', 'lag_3'])
-        next_data_scaled = scaler.transform(next_data_df)
-
-        predictions.append(model.predict(next_data_scaled)[0])
-        last_data = {'lag_1': predictions[-1], 'lag_2': last_data['lag_1'], 'lag_3': last_data['lag_2']}
-        time_step += 1
-
-    return predictions, time_step
-
-app = dash.Dash(__name__)
-
-app.layout = html.Div([
-    html.H1("Water Level Prediction and Forecast", style={'textAlign': 'center'}),
-
-    dcc.Graph(id='prediction-graph'),
-
-    html.Div([
-        html.Label("Target Value for Prediction:"),
-        dcc.Input(id='target-input', type='number', value=30, min=1)
-    ], style={'textAlign': 'center', 'marginTop': '20px'})
-])
-
 def predict_next_day(model, scaler, df, hours_ahead=24):
     last_data = df[['lag_1', 'lag_2', 'lag_3']].iloc[-1]
     last_data_df = pd.DataFrame([last_data], columns=['lag_1', 'lag_2', 'lag_3'])
@@ -146,64 +113,42 @@ def predict_next_day(model, scaler, df, hours_ahead=24):
 
     return predictions, future_time
 
-@app.callback(
-    Output('prediction-graph', 'figure'),
-    Input('target-input', 'value')
-)
-def update_graph(target_value):
-    print(f"Target Value: {target_value}")
+@app.route('/predict', methods=['GET'])
+def get_prediction():
+    target_value = request.args.get('target_value', default=7.5, type=int)
 
     connection = create_connection()
 
     if connection:
-        sensor_data = fetch_sensor_data(connection, 5)
+        sensor_data = fetch_sensor_data(connection, 1)
 
         if not sensor_data:
-            print("No sensor data fetched")
-            return go.Figure()
+            return jsonify({'error': 'No sensor data fetched'}), 400
 
         df = preprocess_data(sensor_data)
 
         if df.empty:
-            print("Dataframe is empty after preprocessing")
-            return go.Figure()
+            return jsonify({'error': 'Dataframe is empty after preprocessing'}), 400
 
         model, scaler = train_xgboost(df)
 
-        predictions, future_time = predict_next_day(model, scaler, df, hours_ahead=24)
+        predictions, future_time = predict_next_day(model, scaler, df, hours_ahead=72)  # 72 hours for 3 days
 
-        fig = go.Figure()
+        # Convert predictions and future_time to native Python types for JSON serialization
+        predictions = [float(p) for p in predictions]
+        future_time = [str(time) for time in future_time]
 
-        fig.add_trace(go.Scatter(
-            x=df['reading_time'], y=df['sensor_value'], mode='lines', name='Actual Sensor Values',
-            line=dict(color='blue')
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=future_time, y=predictions, mode='lines+markers', name='Predicted Sensor Values for Next Day',
-            line=dict(color='red', dash='dot')
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=[df['reading_time'].iloc[0], future_time[-1]], y=[target_value, target_value], mode='lines',
-            name=f'Target Sensor Value ({target_value})', line=dict(color='green', dash='dash')
-        ))
-
-        fig.update_layout(
-            title="Water Level Prediction and Forecast (Next Day)",
-            xaxis_title="Time",
-            yaxis_title="Sensor Value",
-            template='plotly_dark',
-            plot_bgcolor='rgba(0, 0, 0, 0)',
-            xaxis=dict(showgrid=False),
-            yaxis=dict(showgrid=False)
-        )
+        # We return the prediction for the 3rd day (the 72nd hour in this case)
+        result = {
+            'predicted_value_day_3': predictions[72-1],  # the 3rd day prediction corresponds to the 72nd hour
+            'predicted_time_day_3': future_time[72-1],
+            'target_value': target_value
+        }
 
         connection.close()
-        return fig
+        return jsonify(result)
 
-    print("No connection to the database")
-    return go.Figure()
+    return jsonify({'error': 'No connection to the database'}), 500
 
 if __name__ == "__main__":
-    app.run_server(debug=True)
+    app.run(debug=True)
