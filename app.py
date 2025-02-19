@@ -132,23 +132,42 @@ def get_prediction():
 
         model, scaler = train_xgboost(df)
 
-        predictions, future_time = predict_next_day(model, scaler, df, hours_ahead=72)  # 72 hours for 3 days
-
-        # Convert predictions and future_time to native Python types for JSON serialization
+        predictions, future_time = predict_next_day(model, scaler, df, hours_ahead=72)  
+        
         predictions = [float(p) for p in predictions]
         future_time = [str(time) for time in future_time]
+        
 
-        # We return the prediction for the 3rd day (the 72nd hour in this case)
         result = {
-            'predicted_value_day_3': predictions[72-1],  # the 3rd day prediction corresponds to the 72nd hour
+            'predicted_value_day_3': predictions[72-1], 
             'predicted_time_day_3': future_time[72-1],
-            'target_value': target_value
+            'target_value': target_value,
+            'status': get_ph_status(predictions[72-1])
         }
 
         connection.close()
         return jsonify(result)
 
     return jsonify({'error': 'No connection to the database'}), 500
+
+def get_ph_status(ph_value):
+    if ph_value == 'N/A':
+        return None
+    
+    ph_status_ranges = [
+        (-float('inf'), 5.5, "Too Acidic"),
+        (5.5, 6.0, "Acidic"),
+        (6.0, 6.5, "Suboptimal"),
+        (6.5, 7.5, "Optimal"),
+        (7.5, 8.0, "Slightly Alkaline"),
+        (8.0, float('inf'), "Too Alkaline")
+    ]
+    
+    for min_val, max_val, status_text in ph_status_ranges:
+        if min_val <= ph_value < max_val:
+            return status_text
+    
+    return None 
 
 if __name__ == "__main__":
     app.run(debug=True)
