@@ -7,8 +7,11 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, r2_score
 from flask import Flask, jsonify, request
 from sklearn.model_selection import GridSearchCV
+from flask_cors import CORS, cross_origin
 
 app = Flask(__name__)
+cors = CORS(app) # allow CORS for all domains on all routes.
+app.config['CORS_HEADERS'] = 'Content-Type'
 
 def create_connection():
     try:
@@ -170,4 +173,4 @@ def get_ph_status(ph_value):
     return None 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host='0.0.0.0', debug=True)
